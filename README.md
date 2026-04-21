@@ -1,7 +1,7 @@
 # Paping-NG
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![C++](https://img.shields.io/badge/Language-C++17-00599C.svg)](https://en.cppreference.com/w/cpp/compiler_support)
+[![C++](https://img.shields.io/badge/Language-C++20-00599C.svg)](https://en.cppreference.com/w/cpp/compiler_support)
 
 **Paping-NG** – the modern successor to `paping`. Cross-platform TCP/UDP port ping tool rewritten from scratch in modern C++. Fast, lightweight, and open-source.
 
@@ -40,7 +40,7 @@ sudo mv paping /usr/local/bin/
 ```
 
 ### Build from source
-If you prefer to compile it yourself, you will need `CMake` and a modern C++ compiler (GCC/Clang/MSVC):
+If you prefer to compile it yourself, you will need `CMake` and a C++20-capable compiler (GCC/Clang/MSVC):
 
 ```bash
 git clone https://github.com/arch3rek/Paping-NG.git
@@ -87,7 +87,7 @@ Approximate connection times:
 | Feature | Legacy `paping` | `Paping-NG` |
 |---------|-----------------|-------------|
 | **Status** | Abandoned (since ~2016) | Actively Maintained |
-| **Codebase** | Old / Forked | Modern C++17 Rewrite |
+| **Codebase** | Old / Forked | Modern C++20 Rewrite |
 | **Architecture** | 32-bit mostly | Full 64-bit / ARM |
 | **License** | MIT | GPL-3.0 |
 

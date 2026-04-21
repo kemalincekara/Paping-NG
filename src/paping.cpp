@@ -42,13 +42,13 @@ inline void closesocket(SOCKET s) { ::close(s); }
 #include <format>
 #include <chrono>
 #include <thread>
-#include <atomic>
 #include <csignal>
 #include <charconv>
 #include <limits>
 #include <optional>
 #include <cstring>
 #include <algorithm>
+#include <cerrno>
 
 static constexpr std::string_view VERSION = "1.0.2";
 
@@ -124,11 +124,19 @@ static std::optional<HostInfo> resolve(const std::string& hostname) {
     if (getaddrinfo(hostname.c_str(), nullptr, &hints, &res) != 0 || !res)
         return std::nullopt;
 
+    if (res->ai_family != AF_INET && res->ai_family != AF_INET6) {
+        freeaddrinfo(res);
+        return std::nullopt;
+    }
+
     char ip_buf[INET6_ADDRSTRLEN]{};
     void* addr_ptr = res->ai_family == AF_INET
         ? static_cast<void*>(&reinterpret_cast<sockaddr_in*>(res->ai_addr)->sin_addr)
         : static_cast<void*>(&reinterpret_cast<sockaddr_in6*>(res->ai_addr)->sin6_addr);
-    inet_ntop(res->ai_family, addr_ptr, ip_buf, sizeof(ip_buf));
+    if (!inet_ntop(res->ai_family, addr_ptr, ip_buf, sizeof(ip_buf))) {
+        freeaddrinfo(res);
+        return std::nullopt;
+    }
 
     HostInfo info;
     info.input = hostname;
@@ -157,17 +165,52 @@ static Probe tcp_probe(const std::string& ip, int port, int timeout_ms, double& 
     SOCKET sock = ::socket(res->ai_family, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCKET) { freeaddrinfo(res); return Probe::Failed; }
 
+#ifndef _WIN32
+    if (sock >= FD_SETSIZE) {
+        closesocket(sock);
+        freeaddrinfo(res);
+        return Probe::Failed;
+    }
+#endif
+
     // non-blocking connect
 #ifdef _WIN32
     ULONG nonblocking = 1;
-    ioctlsocket(sock, FIONBIO, &nonblocking);
+    if (ioctlsocket(sock, FIONBIO, &nonblocking) != 0) {
+        closesocket(sock);
+        freeaddrinfo(res);
+        return Probe::Failed;
+    }
 #else
     int flags = fcntl(sock, F_GETFL, 0);
-    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+    if (flags < 0 || fcntl(sock, F_SETFL, flags | O_NONBLOCK) != 0) {
+        closesocket(sock);
+        freeaddrinfo(res);
+        return Probe::Failed;
+    }
 #endif
 
     auto t0 = std::chrono::steady_clock::now();
-    ::connect(sock, res->ai_addr, static_cast<SockLen>(res->ai_addrlen));
+    const int connect_rc = ::connect(sock, res->ai_addr, static_cast<SockLen>(res->ai_addrlen));
+#ifdef _WIN32
+    if (connect_rc == SOCKET_ERROR) {
+        const int err = WSAGetLastError();
+        if (err != WSAEINPROGRESS && err != WSAEWOULDBLOCK && err != WSAEALREADY) {
+            closesocket(sock);
+            freeaddrinfo(res);
+            return Probe::Failed;
+        }
+    }
+#else
+    if (connect_rc < 0) {
+        const int err = errno;
+        if (err != EINPROGRESS && err != EALREADY && err != EWOULDBLOCK) {
+            closesocket(sock);
+            freeaddrinfo(res);
+            return Probe::Failed;
+        }
+    }
+#endif
     freeaddrinfo(res);
 
     fd_set wfds, efds;
@@ -190,8 +233,11 @@ static Probe tcp_probe(const std::string& ip, int port, int timeout_ms, double& 
         std::chrono::steady_clock::now() - t0).count();
 
     Probe result = Probe::Connected;
-    if (r <= 0) {
+    if (r == 0) {
         result = Probe::TimedOut;
+    }
+    else if (r < 0) {
+        result = Probe::Failed;
     }
     else if (FD_ISSET(sock, &efds)) {
         result = Probe::Failed;
@@ -199,8 +245,12 @@ static Probe tcp_probe(const std::string& ip, int port, int timeout_ms, double& 
     else {
         int     err = 0;
         SockLen opt_len = static_cast<SockLen>(sizeof(err));
-        getsockopt(sock, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &opt_len);
-        if (err != 0) result = Probe::Failed;
+        if (getsockopt(sock, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &opt_len) != 0) {
+            result = Probe::Failed;
+        }
+        else if (err != 0) {
+            result = Probe::Failed;
+        }
     }
 
     closesocket(sock);
@@ -280,7 +330,7 @@ static std::optional<Config> parse_args(int argc, char* argv[]) {
             if (++i >= argc) return false;
             const char* p = argv[i];
             auto [end, ec] = std::from_chars(p, p + std::strlen(p), out);
-            return ec == std::errc{};
+            return ec == std::errc{} && *end == '\0';
             };
 
         if (arg == "-p" || arg == "--port") { if (!next_int(cfg.port))    return std::nullopt; }
@@ -296,8 +346,8 @@ static std::optional<Config> parse_args(int argc, char* argv[]) {
     return cfg;
 }
 
-static std::atomic<bool> g_stop{ false };
-static void sig_handler(int) { g_stop = true; }
+static volatile std::sig_atomic_t g_stop = 0;
+static void sig_handler(int) { g_stop = 1; }
 
 int main(int argc, char* argv[]) {
     platform_init();
@@ -326,7 +376,7 @@ int main(int argc, char* argv[]) {
     int   exit_code = 0;
     bool  infinite = (cfg.count < 0);
 
-    for (int i = 0; (infinite || i < cfg.count) && !g_stop; ++i) {
+    for (int i = 0; (infinite || i < cfg.count) && g_stop == 0; ++i) {
         double elapsed = 0.0;
         Probe  result = tcp_probe(host.ip, cfg.port, cfg.timeout, elapsed);
 
@@ -344,7 +394,7 @@ int main(int argc, char* argv[]) {
 
         const int  sleep_ms = 1000 - static_cast<int>(std::min(elapsed, 1000.0));
         const bool more = infinite || (i + 1 < cfg.count);
-        if (sleep_ms > 0 && more && !g_stop)
+        if (sleep_ms > 0 && more && g_stop == 0)
             std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
     }
 

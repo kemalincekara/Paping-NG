@@ -24,6 +24,9 @@ install_manifest.txt
 *.vcxproj.filters
 *.vcxproj.user
 
+.vscode
+.DS_Store
+
 # Archives
 *.zip
 *.tar.gz
