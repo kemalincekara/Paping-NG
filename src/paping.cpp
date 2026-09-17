@@ -50,7 +50,7 @@ inline void closesocket(SOCKET s) { ::close(s); }
 #include <algorithm>
 #include <cerrno>
 
-static constexpr std::string_view VERSION = "1.0.3";
+static constexpr std::string_view VERSION = "1.0.4";
 
 namespace col {
     constexpr std::string_view rst = "\033[0m";
@@ -263,9 +263,11 @@ static void print_banner() {
 
 static void print_usage() {
     std::cout <<
-        "Usage: paping <host> -p <port> [options]\n\n"
+        "Usage: paping <host> -p <port> [options]\n"
+        "       paping <host>:<port> [options]\n"
+        "       paping [<IPv6>]:<port> [options]\n\n"
         "Options:\n"
-        "  -p, --port N      TCP port to probe (required)\n"
+        "  -p, --port N      TCP port to probe (overrides host:port)\n"
         "  -c, --count N     stop after N probes (default: run forever)\n"
         "  -t, --timeout N   connection timeout in ms (default: 1000)\n"
         "  -h, --help        show this help\n";
@@ -322,6 +324,7 @@ static void print_stats(const Stats& s) {
 static std::optional<Config> parse_args(int argc, char* argv[]) {
     Config cfg;
     bool   got_host = false;
+    bool   got_port_option = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
@@ -333,13 +336,49 @@ static std::optional<Config> parse_args(int argc, char* argv[]) {
             return ec == std::errc{} && *end == '\0';
             };
 
-        if (arg == "-p" || arg == "--port") { if (!next_int(cfg.port))    return std::nullopt; }
+        if (arg == "-p" || arg == "--port") {
+            if (!next_int(cfg.port)) return std::nullopt;
+            got_port_option = true;
+        }
         else if (arg == "-c" || arg == "--count") { if (!next_int(cfg.count))   return std::nullopt; }
         else if (arg == "-t" || arg == "--timeout") { if (!next_int(cfg.timeout)) return std::nullopt; }
         else if (arg == "-h" || arg == "--help" || arg == "-?") { return std::nullopt; }
         else if (!got_host) { cfg.host = argv[i]; got_host = true; }
         else { return std::nullopt; }
     }
+
+    // Split only unambiguous endpoints; bare IPv6 addresses still use -p.
+    std::string_view host = cfg.host;
+    std::optional<std::string_view> embedded_port;
+    if (!host.empty() && host.front() == '[') {
+        const auto close = host.find(']');
+        if (close == std::string_view::npos) return std::nullopt;
+        const auto suffix = host.substr(close + 1);
+        if (!suffix.empty()) {
+            if (suffix.front() != ':') return std::nullopt;
+            embedded_port = suffix.substr(1);
+        }
+        host = host.substr(1, close - 1);
+    }
+    else {
+        const auto colon = host.find(':');
+        if (colon != std::string_view::npos && colon == host.rfind(':')) {
+            embedded_port = host.substr(colon + 1);
+            host = host.substr(0, colon);
+        }
+    }
+    if (embedded_port) {
+        if (embedded_port->empty()) return std::nullopt;
+        int port = 0;
+        const char* begin = embedded_port->data();
+        const char* end = begin + embedded_port->size();
+        const auto [ptr, ec] = std::from_chars(begin, end, port);
+        if (ec != std::errc{} || ptr != end || port <= 0 || port > 65535)
+            return std::nullopt;
+        if (!got_port_option) cfg.port = port;
+    }
+    if (host.empty()) return std::nullopt;
+    cfg.host = std::string(host);
 
     if (!got_host || cfg.port <= 0 || cfg.port > 65535 || cfg.timeout <= 0)
         return std::nullopt;

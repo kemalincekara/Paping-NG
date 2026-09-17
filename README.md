@@ -58,12 +58,24 @@ Paping-NG is designed to be highly intuitive. It mimics the behavior and argumen
 # Basic TCP ping
 paping example.com -p 80
 
+# Host and port together (IPv4 or hostname)
+paping 192.168.1.100:3389
+paping example.com:80
+
+# IPv6 endpoints use brackets; bare IPv6 still works with -p
+paping [::1]:3389
+paping ::1 -p 3389
+
 # Specify amount of packets (-c)
 paping 8.8.8.8 -p 53 -c 5
 
 # See all options
 paping --help
 ```
+
+The `-p` / `--port` option remains supported. If supplied together with
+`host:port`, it overrides the embedded port regardless of argument order.
+Ports must be integers from 1 to 65535.
 
 **Example Output:**
 ```text

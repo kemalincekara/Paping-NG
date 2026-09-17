@@ -21,8 +21,8 @@ jobs:
         include:
           - os: windows-latest
             os_name: Windows (x64)
-            out_name: paping-windows-amd64.exe
-            cmake_flags: "-G \"Visual Studio 17 2022\" -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+            out_name: paping.exe
+            cmake_flags: "-G Ninja -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
           - os: ubuntu-latest
             os_name: Linux (x64)
             out_name: paping-linux-amd64
@@ -40,6 +40,12 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Set up MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
     - name: Configure CMake
       run: cmake -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_flags }}
 
@@ -49,7 +55,7 @@ jobs:
     - name: Find and Rename binary (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
-      run: Copy-Item "build/Release/paping.exe" -Destination ${{ matrix.out_name }}
+      run: Copy-Item "build/paping.exe" -Destination ${{ matrix.out_name }}
 
     - name: Rename binary (Linux / macOS)
       if: runner.os != 'Windows'
